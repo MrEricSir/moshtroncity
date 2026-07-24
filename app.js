@@ -496,8 +496,10 @@ async function startMicrophoneMode() {
   gestureUnlockedAudioCtx = null;
   if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
 
+  // On mobile, use AGC to increase volume of quiet ambient audio to a detectable level.
+  const isMobile = navigator.maxTouchPoints > 0;
   micStream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: isMobile },
     video: false,
   });
   if (!micIsListening) {
@@ -510,16 +512,20 @@ async function startMicrophoneMode() {
   const { createRealtimeBpmAnalyzer } = await import(REALTIME_BPM_ANALYZER_URL);
   if (!micIsListening) { audioCtx.close(); return; }
 
-  const micSource  = audioCtx.createMediaStreamSource(micStream);
-  const boostGain  = audioCtx.createGain();
-  const bassFilter = audioCtx.createBiquadFilter();
-  const silentSink = audioCtx.createGain();
+  const micSource   = audioCtx.createMediaStreamSource(micStream);
+  const boostGain   = audioCtx.createGain();
+  const kickHiPass  = audioCtx.createBiquadFilter();
+  const kickLoPass  = audioCtx.createBiquadFilter();
+  const silentSink  = audioCtx.createGain();
 
-  boostGain.gain.value      = 10;
-  bassFilter.type            = 'lowpass';
-  bassFilter.frequency.value = 1000;
-  bassFilter.Q.value         = 1;
-  silentSink.gain.value      = 0;
+  boostGain.gain.value         = 10;
+  kickHiPass.type              = 'highpass';
+  kickHiPass.frequency.value   = 60;
+  kickHiPass.Q.value           = 0.7;
+  kickLoPass.type              = 'lowpass';
+  kickLoPass.frequency.value   = 250;
+  kickLoPass.Q.value           = 0.7;
+  silentSink.gain.value        = 0;
 
   micLoudnessAnalyser         = audioCtx.createAnalyser();
   micLoudnessAnalyser.fftSize = 1024;
@@ -539,9 +545,10 @@ async function startMicrophoneMode() {
 
   micSource.connect(boostGain);
   boostGain.connect(micLoudnessAnalyser);
-  boostGain.connect(bassFilter);
-  bassFilter.connect(micBpmAnalyser.node);
-  bassFilter.connect(silentSink);
+  boostGain.connect(kickHiPass);
+  kickHiPass.connect(kickLoPass);
+  kickLoPass.connect(micBpmAnalyser.node);
+  kickLoPass.connect(silentSink);
   silentSink.connect(audioCtx.destination);
 
   micLoudnessTimerId = beginLoudnessTracking(micLoudnessAnalyser);
