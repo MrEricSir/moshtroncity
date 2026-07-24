@@ -492,7 +492,8 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .qr-code-wrap img,
-.qr-code-wrap canvas {
+.qr-code-wrap canvas,
+.qr-code-wrap svg {
   display: block;
 }
 

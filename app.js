@@ -636,12 +636,14 @@ function activateMode(mode) {
     setLiveModeActive(false);
   }
 
-  if (mode === 'share') ensureQrCode();
-
   activeMode = mode;
   document.getElementById('mode-selector').classList.add('hidden');
   document.querySelectorAll('.mode-content').forEach(el => el.classList.add('hidden'));
   document.getElementById(`mode-${mode}`).classList.remove('hidden');
+
+  if (mode === 'share') {
+    try { ensureQrCode(); } catch (e) { console.warn('[qr] failed:', e); }
+  }
 }
 
 function returnToModeSelector() {
@@ -680,14 +682,11 @@ let qrCodeGenerated = false;
 
 function ensureQrCode() {
   if (qrCodeGenerated) return;
+  var qr = qrcode(0, 'M');
+  qr.addData('https://mrericsir.github.io/moshtroncity/');
+  qr.make();
+  document.getElementById('qr-code').innerHTML = qr.createSvgTag({ cellSize: 7, margin: 4 });
   qrCodeGenerated = true;
-  new QRCode(document.getElementById('qr-code'), {
-    text:       'https://mrericsir.github.io/moshtroncity/',
-    width:      240,
-    height:     240,
-    colorDark:  '#000000',
-    colorLight: '#ffffff',
-  });
 }
 
 //

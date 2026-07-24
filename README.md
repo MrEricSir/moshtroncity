@@ -33,6 +33,6 @@ Run the Playwright tests:
 Moshtroncity uses the following 3rd party libraries:
 - [datamoshlive](https://github.com/geikha/datamoshlive)
 - [realtime-bpm-analyzer](https://github.com/dlepaux/realtime-bpm-analyzer)
-- [qrcodejs](https://github.com/davidshimjs/qrcodejs)
+- [qrcode](https://github.com/soldair/node-qrcode)
 - Sixtyfour font from [Google Fonts](https://developers.google.com/fonts/)
 - [Playwright](https://github.com/microsoft/playwright) for testing
