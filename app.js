@@ -115,7 +115,10 @@ async function startApp() {
     controlsToggleBtn.classList.remove('hidden');
 
     setLiveModeActive(true);
-    startMicrophoneMode().catch(err => console.error('[mic]', err));
+    startMicrophoneMode().catch(err => {
+      console.error('[mic]', err);
+      setLiveModeActive(false);
+    });
 
   } catch (err) {
     appHasStarted = false;
@@ -128,7 +131,16 @@ async function startApp() {
   }
 }
 
-overlay.addEventListener('click', startApp);
+// Hold AudioContext for re-use as a workaround on Mobile Safari.
+let gestureUnlockedAudioCtx = null;
+
+overlay.addEventListener('click', () => {
+  if (!gestureUnlockedAudioCtx) {
+    gestureUnlockedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    gestureUnlockedAudioCtx.resume().catch(() => {});
+  }
+  startApp();
+});
 
 function displayError(msg) {
   if (msg) {
@@ -480,7 +492,9 @@ async function startMicrophoneMode() {
   // function mid-setup by setting it back to false.
   micIsListening = true;
 
-  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const audioCtx = gestureUnlockedAudioCtx ?? new (window.AudioContext || window.webkitAudioContext)();
+  gestureUnlockedAudioCtx = null;
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
 
   micStream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
@@ -495,8 +509,6 @@ async function startMicrophoneMode() {
 
   const { createRealtimeBpmAnalyzer } = await import(REALTIME_BPM_ANALYZER_URL);
   if (!micIsListening) { audioCtx.close(); return; }
-
-  if (audioCtx.state === 'suspended') await audioCtx.resume();
 
   const micSource  = audioCtx.createMediaStreamSource(micStream);
   const boostGain  = audioCtx.createGain();
@@ -662,7 +674,10 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
         setLiveModeActive(false);
       } else {
         setLiveModeActive(true);
-        startMicrophoneMode().catch(err => console.error('[mic]', err));
+        startMicrophoneMode().catch(err => {
+          console.error('[mic]', err);
+          setLiveModeActive(false);
+        });
       }
     } else {
       activateMode(btn.dataset.mode);
