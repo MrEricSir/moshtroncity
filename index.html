@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>moshtroncity</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Sixtyfour&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Permission / loading overlay -->
+  <div id="overlay" class="overlay">
+    <div class="overlay-content">
+      <h1 data-text="moshtroncity">moshtroncity</h1>
+      <p id="error-msg" class="error-msg hidden"></p>
+    </div>
+  </div>
+
+  <!-- Main canvas injected here by DatamoshLive -->
+  <div id="canvas-container"></div>
+
+  <!-- Controls panel -->
+  <div id="controls" class="controls hidden">
+
+    <!-- Mode selector: shown when no mode is active -->
+    <div id="mode-selector">
+      <button class="mode-btn mode-btn-live" data-mode="live">Live</button>
+      <button class="mode-btn mode-btn-play" data-mode="play">Play</button>
+      <button class="mode-btn mode-btn-share" data-mode="share">Share</button>
+    </div>
+
+    <!-- Play mode -->
+    <div id="mode-play" class="mode-content hidden">
+      <button class="btn-back">&#8592; Back</button>
+      <input type="file" id="file-input" accept="audio/*" hidden>
+      <div class="play-layout">
+        <button id="btn-open-file" class="btn btn-icon play-open-btn">Open</button>
+        <div class="play-player">
+          <p id="play-track-name" class="play-track-name">No file selected</p>
+          <div class="seek-wrap">
+            <input type="range" id="seek-bar" min="0" max="1000" value="0" step="1" disabled>
+          </div>
+          <div class="time-display">
+            <span id="time-current">--:--</span>
+            <span id="time-total">--:--</span>
+          </div>
+          <div class="controls-row player-controls">
+            <button id="btn-skip-back"    class="btn btn-icon">&#9194;</button>
+            <button id="btn-play-pause"   class="btn btn-icon" style="flex:1" disabled>&#9654; Play</button>
+            <button id="btn-skip-forward" class="btn btn-icon">&#9193;</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Share mode -->
+    <div id="mode-share" class="mode-content hidden">
+      <button class="btn-back">&#8592; Back</button>
+      <div class="share-panel">
+        <a href="https://mrericsir.github.io/moshtroncity/" target="_blank" rel="noopener" class="share-url">mrericsir.github.io/moshtroncity</a>
+        <div id="qr-code" class="qr-code-wrap"></div>
+        <button id="btn-open-diagnose" class="btn-diagnose-link">diagnose</button>
+      </div>
+    </div>
+
+    <!-- Diagnose mode -->
+    <div id="mode-diagnose" class="mode-content hidden">
+      <button class="btn-back">&#8592; Back</button>
+      <div class="controls-row indicator-row">
+        <span class="led" id="led-peak"></span>
+        <span class="led-label">Peak</span>
+        <span class="led" id="led-beat"></span>
+        <span class="led-label">Beat</span>
+        <span class="bpm-display">-- BPM</span>
+      </div>
+      <div class="controls-row">
+        <button id="btn-diagnose-sync"  class="btn btn-icon" style="flex:1">Sync</button>
+        <button id="btn-diagnose-drop"  class="btn btn-icon" style="flex:1">Drop</button>
+        <button id="btn-diagnose-zoom"  class="btn btn-icon" style="flex:1">Zoom</button>
+        <button id="btn-color-flash" class="btn btn-icon" style="flex:1">Flash</button>
+      </div>
+    </div>
+
+
+  </div>
+
+  <!-- Semicircle toggle button -->
+  <button id="btn-show-controls" class="btn btn-fab hidden" title="Open controls">&#9650;</button>
+
+  <script src="https://unpkg.com/datamoshlive@latest/dist/datamoshlive.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
