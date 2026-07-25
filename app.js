@@ -40,10 +40,14 @@ let tintCtx          = null;
 let tintAnimFrameId  = null;
 let currentTintColor = null;
 let tintExpiresAt    = 0;
+let rawCameraVideo   = null;  // kept at module scope so flipCamera() can swap srcObject
+let rawCameraStream  = null;
+let currentFacingMode = 'environment';
 
 function createTintedCameraStream(cameraStream) {
   return new Promise((resolve, reject) => {
     const cameraVideo       = document.createElement('video');
+    rawCameraVideo          = cameraVideo;
     cameraVideo.srcObject   = cameraStream;
     cameraVideo.muted       = true;
     cameraVideo.playsInline = true;
@@ -106,13 +110,17 @@ async function startApp() {
     });
     datamosh.mount(canvasContainer);
 
-    const cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-    const tintedStream = await createTintedCameraStream(cameraStream);
+    rawCameraStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: currentFacingMode },
+      audio: false,
+    });
+    const tintedStream = await createTintedCameraStream(rawCameraStream);
     await datamosh.initVideo(tintedStream);
     datamosh.start();
 
     overlay.classList.add('hidden');
     controlsToggleBtn.classList.remove('hidden');
+    if (navigator.maxTouchPoints > 0) flipCameraBtn.classList.remove('hidden');
 
     setLiveModeActive(true);
     startMicrophoneMode().catch(err => {
@@ -130,6 +138,28 @@ async function startApp() {
     );
   }
 }
+
+const flipCameraBtn = document.getElementById('btn-flip-camera');
+
+async function flipCamera() {
+  const nextFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
+  try {
+    const newStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: nextFacingMode },
+      audio: false,
+    });
+    rawCameraStream.getTracks().forEach(t => t.stop());
+    rawCameraStream   = newStream;
+    currentFacingMode = nextFacingMode;
+    rawCameraVideo.srcObject = newStream;
+    await rawCameraVideo.play();
+    datamosh?.sync();
+  } catch (err) {
+    console.warn('[camera flip]', err);
+  }
+}
+
+flipCameraBtn.addEventListener('click', flipCamera);
 
 // Hold AudioContext for re-use as a workaround on Mobile Safari.
 let gestureUnlockedAudioCtx = null;
