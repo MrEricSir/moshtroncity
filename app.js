@@ -690,9 +690,6 @@ function activateMode(mode) {
   document.querySelectorAll('.mode-content').forEach(el => el.classList.add('hidden'));
   document.getElementById(`mode-${mode}`).classList.remove('hidden');
 
-  if (mode === 'share') {
-    try { ensureQrCode(); } catch (e) { console.warn('[qr] failed:', e); }
-  }
 }
 
 function returnToModeSelector() {
@@ -729,17 +726,6 @@ document.querySelectorAll('.btn-back').forEach(btn => {
 //
 // Share mode panel
 //
-
-let qrCodeGenerated = false;
-
-function ensureQrCode() {
-  if (qrCodeGenerated) return;
-  var qr = qrcode(0, 'M');
-  qr.addData('https://mrericsir.github.io/moshtroncity/');
-  qr.make();
-  document.getElementById('qr-code').innerHTML = qr.createSvgTag({ cellSize: 7, margin: 4 });
-  qrCodeGenerated = true;
-}
 
 //
 // Diagnose mode panel

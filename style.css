@@ -500,17 +500,11 @@ input[type="range"]::-moz-range-thumb {
   color: var(--text);
 }
 
-.qr-code-wrap {
-  background: #fff;
-  border-radius: var(--radius);
-  padding: 10px;
-  display: inline-flex;
-}
-
-.qr-code-wrap img,
-.qr-code-wrap canvas,
-.qr-code-wrap svg {
+.qr-code-img {
   display: block;
+  border-radius: var(--radius);
+  background: #fff;
+  padding: 10px;
 }
 
 /* Diagnose link */
