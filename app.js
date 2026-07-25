@@ -544,16 +544,20 @@ async function startMicrophoneMode() {
 
   const micSource   = audioCtx.createMediaStreamSource(micStream);
   const boostGain   = audioCtx.createGain();
+  const bpmBoost    = audioCtx.createGain();
   const kickHiPass  = audioCtx.createBiquadFilter();
   const kickLoPass  = audioCtx.createBiquadFilter();
   const silentSink  = audioCtx.createGain();
 
   boostGain.gain.value         = 10;
+  // Extra 2x on mobile only (20x total + hardware AGC).
+  bpmBoost.gain.value          = isMobile ? 2 : 1;
   kickHiPass.type              = 'highpass';
   kickHiPass.frequency.value   = 60;
   kickHiPass.Q.value           = 0.7;
   kickLoPass.type              = 'lowpass';
-  kickLoPass.frequency.value   = 250;
+  // Attempt to capture kick drum attack at around 600 Hz
+  kickLoPass.frequency.value   = 600;
   kickLoPass.Q.value           = 0.7;
   silentSink.gain.value        = 0;
 
@@ -577,8 +581,9 @@ async function startMicrophoneMode() {
   boostGain.connect(micLoudnessAnalyser);
   boostGain.connect(kickHiPass);
   kickHiPass.connect(kickLoPass);
-  kickLoPass.connect(micBpmAnalyser.node);
-  kickLoPass.connect(silentSink);
+  kickLoPass.connect(bpmBoost);
+  bpmBoost.connect(micBpmAnalyser.node);
+  bpmBoost.connect(silentSink);
   silentSink.connect(audioCtx.destination);
 
   micLoudnessTimerId = beginLoudnessTracking(micLoudnessAnalyser);
