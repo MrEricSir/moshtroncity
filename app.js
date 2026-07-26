@@ -197,6 +197,9 @@ function closeControlsPanel() {
   panelIsOpen = false;
   controlsPanel.classList.add('hidden');
   controlsToggleBtn.innerHTML = '&#9650;';
+  if (activeMode !== null) {
+    returnToModeSelector();
+  }
 }
 
 controlsToggleBtn.addEventListener('click', () => {
