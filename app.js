@@ -197,7 +197,7 @@ function closeControlsPanel() {
   panelIsOpen = false;
   controlsPanel.classList.add('hidden');
   controlsToggleBtn.innerHTML = '&#9650;';
-  if (activeMode !== null) {
+  if (activeMode === 'share' || activeMode === 'diagnose') {
     returnToModeSelector();
   }
 }
@@ -278,6 +278,7 @@ function clearVisualEffects() {
 
 function applyBeatEffects(beatIndex) {
   if (!datamosh) return;
+
 
   datamosh.corruptRate = Math.min(Math.random() * loudnessLevel, 1.0);
   datamosh.corrupt();
@@ -362,6 +363,18 @@ async function loadAudioFile(file) {
     if (topCandidate) {
       detectedBpm = clampBpmToRange(topCandidate.tempo);
       updateBpmDisplay(`${detectedBpm} BPM`);
+      if (isAudioPlaying) {
+        const msPerBeat = Math.round(60_000 / detectedBpm);
+        setBeatSpeed(msPerBeat);
+        if (!beatIntervalId) {
+          playBeatIndex  = 0;
+          beatIntervalId = setInterval(() => {
+            if (!isAudioPlaying) return;
+            applyBeatEffects(playBeatIndex);
+            playBeatIndex = (playBeatIndex + 1) % 4;
+          }, msPerBeat);
+        }
+      }
     } else {
       updateBpmDisplay('-- BPM');
     }
@@ -378,10 +391,12 @@ function handlePlayPauseToggle() {
     audioPlayer.play();
     isAudioPlaying         = true;
     playPauseBtn.innerHTML = '&#9646;&#9646; Pause';
+    setPlayModeActive(true);
 
     if (detectedBpm > 0 && !beatIntervalId) {
       playBeatIndex      = 0;
       const msPerBeat    = (60 / detectedBpm) * 1000;
+      setBeatSpeed(msPerBeat);
       beatIntervalId     = setInterval(() => {
         if (!isAudioPlaying) return;
         applyBeatEffects(playBeatIndex);
@@ -392,6 +407,7 @@ function handlePlayPauseToggle() {
     audioPlayer.pause();
     isAudioPlaying         = false;
     playPauseBtn.innerHTML = '&#9654; Play';
+    setPlayModeActive(false);
   }
 }
 
@@ -407,8 +423,9 @@ function tearDownPlayMode() {
   if (playLoudnessCtx) { playLoudnessCtx.close(); playLoudnessCtx = null; }
   if (audioPlayer)     { audioPlayer.pause(); audioPlayer.src = ''; audioPlayer = null; }
 
-  playPauseBtn.innerHTML     = '&#9654; Play';
-  playPauseBtn.disabled      = true;
+  playPauseBtn.innerHTML = '&#9654; Play';
+  playPauseBtn.disabled  = true;
+  setPlayModeActive(false);
   trackNameLabel.textContent = 'No file selected';
   seekBar.value              = 0;
   seekBar.disabled           = true;
@@ -612,6 +629,7 @@ async function startMicrophoneMode() {
     if (driftRatio > 0.05) {
       lockedBpm = bpm;
       updateBpmDisplay(`${bpm} BPM`);
+      setBeatSpeed(Math.round(60_000 / bpm));
       alignBeatGridToTempo(60_000 / bpm, performance.now());
     }
   }
@@ -679,15 +697,29 @@ let activeMode = null;
 
 const liveModeBtn = document.querySelector('.mode-btn-live');
 
+const playModeBtn = document.querySelector('.mode-btn-play');
+
+// Elements that "flash" to the beat.
+let beatAnimTargets = [];
+
 function setLiveModeActive(isActive) {
   liveModeBtn.classList.toggle('mode-btn-live-active', isActive);
+  beatAnimTargets = isActive ? [liveModeBtn] : [];
+}
+
+function setPlayModeActive(isActive) {
+  playModeBtn.classList.toggle('mode-btn-play-active', isActive);
+  playPauseBtn.classList.toggle('btn-play-active', isActive);
+  beatAnimTargets = isActive ? [playModeBtn, playPauseBtn] : [];
+}
+
+function setBeatSpeed(beatMs) {
+  beatAnimTargets.forEach(el => el.style.setProperty('--beat-ms', `${beatMs}ms`));
 }
 
 function activateMode(mode) {
-  if (activeMode === 'play') tearDownPlayMode();
-
   // Switching to Play replaces mic audio with a file, so stop the mic.
-  // Switching to Test just opens the manual controls -- mic keeps running.
+  // Switching to Share/Diagnose just opens a panel -- mic keeps running.
   if (mode === 'play' && micIsListening) {
     try { stopMicrophoneMode(); } catch (e) { console.warn('[mic] cleanup failed:', e); }
     setLiveModeActive(false);
@@ -701,7 +733,6 @@ function activateMode(mode) {
 }
 
 function returnToModeSelector() {
-  if (activeMode === 'play') tearDownPlayMode();
   activeMode = null;
   document.querySelectorAll('.mode-content').forEach(el => el.classList.add('hidden'));
   document.getElementById('mode-selector').classList.remove('hidden');
@@ -715,6 +746,7 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
         try { stopMicrophoneMode(); } catch (e) { console.warn('[mic] cleanup failed:', e); }
         setLiveModeActive(false);
       } else {
+        tearDownPlayMode();
         setLiveModeActive(true);
         startMicrophoneMode().catch(err => {
           console.error('[mic]', err);

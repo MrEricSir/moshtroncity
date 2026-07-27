@@ -337,31 +337,47 @@ input[type="range"]::-moz-range-thumb {
 .mode-btn:active { transform: scale(0.97); }
 
 .mode-btn-live {
+  --pulse-rgb: 255, 74, 248;
   color: var(--accent);
   border-color: rgba(255, 74, 248, 0.45);
 }
 .mode-btn-live:hover { background: rgba(255, 74, 248, 0.1); box-shadow: 0 0 16px rgba(255, 74, 248, 0.2) inset; }
 
 .mode-btn-live-active {
-  animation: mode-btn-live-pulse 1.2s ease-in-out infinite;
+  animation: btn-bpm-pulse var(--beat-ms, 1.2s) ease-out infinite;
 }
 
-@keyframes mode-btn-live-pulse {
-  0%, 100% {
-    background: rgba(255, 74, 248, 0.15);
-    box-shadow: 0 0 20px rgba(255, 74, 248, 0.35) inset;
+/* Generic BPM-synced pulse -- color set via --pulse-rgb on the element */
+@keyframes btn-bpm-pulse {
+  0% {
+    background: rgba(var(--pulse-rgb), 0.35);
+    box-shadow: 0 0 24px rgba(var(--pulse-rgb), 0.5) inset;
   }
-  50% {
-    background: rgba(255, 74, 248, 0.03);
+  100% {
+    background: rgba(var(--pulse-rgb), 0.03);
     box-shadow: none;
   }
 }
 
+#btn-play-pause {
+  --pulse-rgb: 57, 255, 20;
+}
+
+.btn-play-active {
+  animation: btn-bpm-pulse var(--beat-ms, 1.2s) ease-out infinite;
+}
+
+
 .mode-btn-play {
+  --pulse-rgb: 57, 255, 20;
   color: #39ff14;
   border-color: rgba(57, 255, 20, 0.45);
 }
 .mode-btn-play:hover { background: rgba(57, 255, 20, 0.08); box-shadow: 0 0 16px rgba(57, 255, 20, 0.18) inset; }
+
+.mode-btn-play-active {
+  animation: btn-bpm-pulse var(--beat-ms, 1.2s) ease-out infinite;
+}
 
 .mode-btn-share {
   color: #ff9a00;
