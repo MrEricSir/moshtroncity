@@ -390,7 +390,7 @@ function handlePlayPauseToggle() {
     if (playLoudnessCtx?.state === 'suspended') playLoudnessCtx.resume();
     audioPlayer.play();
     isAudioPlaying         = true;
-    playPauseBtn.innerHTML = '&#9646;&#9646; Pause';
+    playPauseBtn.innerHTML = '&#x2016; Pause';
     setPlayModeActive(true);
 
     if (detectedBpm > 0 && !beatIntervalId) {
@@ -406,7 +406,7 @@ function handlePlayPauseToggle() {
   } else {
     audioPlayer.pause();
     isAudioPlaying         = false;
-    playPauseBtn.innerHTML = '&#9654; Play';
+    playPauseBtn.innerHTML = '&#x25BA; Play';
     setPlayModeActive(false);
   }
 }
@@ -423,7 +423,7 @@ function tearDownPlayMode() {
   if (playLoudnessCtx) { playLoudnessCtx.close(); playLoudnessCtx = null; }
   if (audioPlayer)     { audioPlayer.pause(); audioPlayer.src = ''; audioPlayer = null; }
 
-  playPauseBtn.innerHTML = '&#9654; Play';
+  playPauseBtn.innerHTML = '&#x25BA; Play';
   playPauseBtn.disabled  = true;
   setPlayModeActive(false);
   trackNameLabel.textContent = 'No file selected';
@@ -473,7 +473,7 @@ function attachAudioSeekListeners() {
   });
   audioPlayer.addEventListener('ended', () => {
     isAudioPlaying         = false;
-    playPauseBtn.innerHTML = '&#9654; Play';
+    playPauseBtn.innerHTML = '&#x25BA; Play';
     clearInterval(beatIntervalId);
     beatIntervalId = null;
   });
