@@ -122,10 +122,10 @@ async function startApp() {
     controlsToggleBtn.classList.remove('hidden');
     if (navigator.maxTouchPoints > 0) flipCameraBtn.classList.remove('hidden');
 
-    setLiveModeActive(true);
+    transitionTo(STATES.LIVE);
     startMicrophoneMode().catch(err => {
       console.error('[mic]', err);
-      setLiveModeActive(false);
+      transitionTo(STATES.IDLE);
     });
 
   } catch (err) {
@@ -387,11 +387,14 @@ async function loadAudioFile(file) {
 function handlePlayPauseToggle() {
   if (!audioPlayer) return;
   if (audioPlayer.paused) {
+    if (appState === STATES.LIVE) {
+      try { stopMicrophoneMode(); } catch (e) { console.warn('[mic] cleanup failed:', e); }
+    }
     if (playLoudnessCtx?.state === 'suspended') playLoudnessCtx.resume();
     audioPlayer.play();
     isAudioPlaying         = true;
     playPauseBtn.innerHTML = '&#x2016; Pause';
-    setPlayModeActive(true);
+    transitionTo(STATES.PLAYING);
 
     if (detectedBpm > 0 && !beatIntervalId) {
       playBeatIndex      = 0;
@@ -407,7 +410,7 @@ function handlePlayPauseToggle() {
     audioPlayer.pause();
     isAudioPlaying         = false;
     playPauseBtn.innerHTML = '&#x25BA; Play';
-    setPlayModeActive(false);
+    transitionTo(STATES.IDLE);
   }
 }
 
@@ -425,7 +428,7 @@ function tearDownPlayMode() {
 
   playPauseBtn.innerHTML = '&#x25BA; Play';
   playPauseBtn.disabled  = true;
-  setPlayModeActive(false);
+  if (appState === STATES.PLAYING) transitionTo(STATES.IDLE);
   trackNameLabel.textContent = 'No file selected';
   seekBar.value              = 0;
   seekBar.disabled           = true;
@@ -476,6 +479,7 @@ function attachAudioSeekListeners() {
     playPauseBtn.innerHTML = '&#x25BA; Play';
     clearInterval(beatIntervalId);
     beatIntervalId = null;
+    transitionTo(STATES.IDLE);
   });
 }
 
@@ -702,15 +706,35 @@ const playModeBtn = document.querySelector('.mode-btn-play');
 // Elements that "flash" to the beat.
 let beatAnimTargets = [];
 
-function setLiveModeActive(isActive) {
-  liveModeBtn.classList.toggle('mode-btn-live-active', isActive);
-  beatAnimTargets = isActive ? [liveModeBtn] : [];
-}
+//
+// Mode state machine
+//
 
-function setPlayModeActive(isActive) {
-  playModeBtn.classList.toggle('mode-btn-play-active', isActive);
-  playPauseBtn.classList.toggle('btn-play-active', isActive);
-  beatAnimTargets = isActive ? [playModeBtn, playPauseBtn] : [];
+// IDLE    : no audio source selected
+// LIVE    : microphone is listening
+// PLAYING : an audio track is playing
+
+const STATES = { IDLE: 'idle', LIVE: 'live', PLAYING: 'playing' };
+let appState = STATES.IDLE;
+
+function transitionTo(newState) {
+  if (appState === newState) return;
+  console.log(`[state] ${appState} -> ${newState}`);
+  appState = newState;
+
+  liveModeBtn.classList.remove('mode-btn-live-active');
+  playModeBtn.classList.remove('mode-btn-play-active');
+  playPauseBtn.classList.remove('btn-play-active');
+  beatAnimTargets = [];
+
+  if (newState === STATES.LIVE) {
+    liveModeBtn.classList.add('mode-btn-live-active');
+    beatAnimTargets = [liveModeBtn];
+  } else if (newState === STATES.PLAYING) {
+    playModeBtn.classList.add('mode-btn-play-active');
+    playPauseBtn.classList.add('btn-play-active');
+    beatAnimTargets = [playModeBtn, playPauseBtn];
+  }
 }
 
 function setBeatSpeed(beatMs) {
@@ -718,13 +742,6 @@ function setBeatSpeed(beatMs) {
 }
 
 function activateMode(mode) {
-  // Switching to Play replaces mic audio with a file, so stop the mic.
-  // Switching to Share/Diagnose just opens a panel -- mic keeps running.
-  if (mode === 'play' && micIsListening) {
-    try { stopMicrophoneMode(); } catch (e) { console.warn('[mic] cleanup failed:', e); }
-    setLiveModeActive(false);
-  }
-
   activeMode = mode;
   document.getElementById('mode-selector').classList.add('hidden');
   document.querySelectorAll('.mode-content').forEach(el => el.classList.add('hidden'));
@@ -736,23 +753,18 @@ function returnToModeSelector() {
   activeMode = null;
   document.querySelectorAll('.mode-content').forEach(el => el.classList.add('hidden'));
   document.getElementById('mode-selector').classList.remove('hidden');
-  setLiveModeActive(micIsListening);
 }
 
 document.querySelectorAll('.mode-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     if (btn.dataset.mode === 'live') {
-      if (micIsListening) {
-        try { stopMicrophoneMode(); } catch (e) { console.warn('[mic] cleanup failed:', e); }
-        setLiveModeActive(false);
-      } else {
-        tearDownPlayMode();
-        setLiveModeActive(true);
-        startMicrophoneMode().catch(err => {
-          console.error('[mic]', err);
-          setLiveModeActive(false);
-        });
-      }
+      if (appState === STATES.LIVE) return;  // already live, no-op
+      if (appState === STATES.PLAYING) tearDownPlayMode();
+      transitionTo(STATES.LIVE);
+      startMicrophoneMode().catch(err => {
+        console.error('[mic]', err);
+        transitionTo(STATES.IDLE);
+      });
     } else {
       activateMode(btn.dataset.mode);
     }
