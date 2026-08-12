@@ -782,9 +782,19 @@ function returnToModeSelector() {
   document.getElementById('mode-selector').classList.remove('hidden');
 }
 
+let liveBtnLastTapAt = 0;
+
 document.querySelectorAll('.mode-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     if (btn.dataset.mode === 'live') {
+      const now = Date.now();
+      if (now - liveBtnLastTapAt < 300) {
+        liveBtnLastTapAt = 0;
+        flipCamera();
+        return;
+      }
+      liveBtnLastTapAt = now;
+
       if (appState === STATES.LIVE) return;  // already live, no-op
       if (appState === STATES.PLAYING) tearDownPlayMode();
       transitionTo(STATES.LIVE);
