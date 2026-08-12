@@ -516,7 +516,11 @@ let tempoIsLocked            = false;
 let lockedBpm                = 0;
 let micBeatIndex             = 0;
 // Incrementing this counter invalidates any in-flight beat grid scheduler.
-let beatGridGeneration = 0;
+let beatGridGeneration  = 0;
+// Anchor time and interval for the running beat grid -- written by
+// alignBeatGridToTempo and nudged by the validPeak phase corrector.
+let beatGridAnchor      = 0;
+let beatGridIntervalMs  = 0;
 
 function clampBpmToRange(bpm) {
   while (bpm > 160) bpm /= 2;
@@ -530,15 +534,17 @@ function onMicBeat() {
   micBeatIndex = (micBeatIndex + 1) % 16;
 }
 
-function alignBeatGridToTempo(beatIntervalMs, detectedAt) {
+function alignBeatGridToTempo(intervalMs, anchor) {
   // Invalidate any running scheduler by advancing the generation counter.
   const gen = ++beatGridGeneration;
-  tempoIsLocked = true;
+  tempoIsLocked     = true;
+  beatGridAnchor    = anchor;
+  beatGridIntervalMs = intervalMs;
 
-  // Anchor beat times to detectedAt so each setTimeout is scheduled against an
-  // absolute reference -- errors never compound across beats.
+  // Reads beatGridAnchor and beatGridIntervalMs from module scope on every tick
+  // so that phase corrections applied by validPeak take effect immediately.
   function scheduleNext(index) {
-    const delay = detectedAt + index * beatIntervalMs - performance.now();
+    const delay = beatGridAnchor + index * beatGridIntervalMs - performance.now();
     setTimeout(() => {
       if (gen !== beatGridGeneration || !micIsListening) return;
       onMicBeat();
@@ -630,8 +636,28 @@ async function startMicrophoneMode() {
   }
 
   micBpmAnalyser.on('validPeak', () => {
+    const now = performance.now();
     flashLedBriefly(peakLed, 'led-peak-on');
-    lastPeakDetectedAt = performance.now();
+    lastPeakDetectedAt = now;
+
+    if (!tempoIsLocked || beatGridIntervalMs === 0) return;
+
+    // Compute how far this peak sits from the nearest scheduled beat.
+    // fractional is in [0, 1); normalize to [-0.5, 0.5) so the sign tells us
+    // which direction the grid needs to shift.
+    const beatsElapsed       = (now - beatGridAnchor) / beatGridIntervalMs;
+    const fractional         = ((beatsElapsed % 1) + 1) % 1;
+    const normalizedFraction = fractional > 0.5 ? fractional - 1 : fractional;
+    const phaseErrorMs       = normalizedFraction * beatGridIntervalMs;
+
+    // Only act when the peak is within 40% of a beat boundary -- peaks that
+    // land in the middle of a beat interval are likely non-kick transients.
+    if (Math.abs(phaseErrorMs) < beatGridIntervalMs * 0.4) {
+      // Apply 25% of the error each peak (EMA) so corrections converge
+      // smoothly over several beats rather than jumping all at once.
+      beatGridAnchor += phaseErrorMs * 0.25;
+      console.log(`[phase] error ${phaseErrorMs.toFixed(1)} ms -> anchor nudged ${(phaseErrorMs * 0.25).toFixed(1)} ms`);
+    }
   });
 
   function handleBpmReading(bpm, label) {
