@@ -308,7 +308,8 @@ const REALTIME_BPM_ANALYZER_URL =
 let audioPlayer         = null;
 let detectedBpm         = 0;
 let playBeatIndex       = 0;
-let beatIntervalId      = null;
+// Incrementing this counter invalidates any in-flight play beat scheduler.
+let playBeatGeneration = 0;
 let isAudioPlaying      = false;
 let playLoudnessCtx     = null;
 let playLoudnessTimerId = null;
@@ -362,18 +363,12 @@ async function loadAudioFile(file) {
       : null;
     if (topCandidate) {
       detectedBpm = clampBpmToRange(topCandidate.tempo);
-      updateBpmDisplay(`${detectedBpm} BPM`);
+      updateBpmDisplay(`${Math.round(detectedBpm)} BPM`);
       if (isAudioPlaying) {
-        const msPerBeat = Math.round(60_000 / detectedBpm);
+        const msPerBeat = 60_000 / detectedBpm;
         setBeatSpeed(msPerBeat);
-        if (!beatIntervalId) {
-          playBeatIndex  = 0;
-          beatIntervalId = setInterval(() => {
-            if (!isAudioPlaying) return;
-            applyBeatEffects(playBeatIndex);
-            playBeatIndex = (playBeatIndex + 1) % 4;
-          }, msPerBeat);
-        }
+        playBeatIndex = 0;
+        startPlayBeatScheduler(msPerBeat);
       }
     } else {
       updateBpmDisplay('-- BPM');
@@ -396,15 +391,11 @@ function handlePlayPauseToggle() {
     playPauseBtn.innerHTML = '&#x2016; Pause';
     transitionTo(STATES.PLAYING);
 
-    if (detectedBpm > 0 && !beatIntervalId) {
-      playBeatIndex      = 0;
-      const msPerBeat    = (60 / detectedBpm) * 1000;
+    if (detectedBpm > 0) {
+      playBeatIndex   = 0;
+      const msPerBeat = 60_000 / detectedBpm;
       setBeatSpeed(msPerBeat);
-      beatIntervalId     = setInterval(() => {
-        if (!isAudioPlaying) return;
-        applyBeatEffects(playBeatIndex);
-        playBeatIndex = (playBeatIndex + 1) % 4;
-      }, msPerBeat);
+      startPlayBeatScheduler(msPerBeat);
     }
   } else {
     audioPlayer.pause();
@@ -416,9 +407,8 @@ function handlePlayPauseToggle() {
 
 function tearDownPlayMode() {
   isAudioPlaying = false;
-  clearInterval(beatIntervalId);
+  playBeatGeneration++;
   clearInterval(playLoudnessTimerId);
-  beatIntervalId      = null;
   playLoudnessTimerId = null;
   detectedBpm         = 0;
   clearVisualEffects();
@@ -435,6 +425,22 @@ function tearDownPlayMode() {
   timeCurrentEl.textContent  = '--:--';
   timeTotalEl.textContent    = '--:--';
   updateBpmDisplay('-- BPM');
+}
+
+function startPlayBeatScheduler(intervalMs) {
+  const gen       = ++playBeatGeneration;
+  const startTime = performance.now();
+
+  function scheduleNext(index) {
+    const delay = startTime + index * intervalMs - performance.now();
+    setTimeout(() => {
+      if (gen !== playBeatGeneration || !isAudioPlaying) return;
+      applyBeatEffects(playBeatIndex);
+      playBeatIndex = (playBeatIndex + 1) % 4;
+      scheduleNext(index + 1);
+    }, Math.max(0, delay));
+  }
+  scheduleNext(1);
 }
 
 document.getElementById('file-input').addEventListener('change', (e) => {
@@ -477,8 +483,7 @@ function attachAudioSeekListeners() {
   audioPlayer.addEventListener('ended', () => {
     isAudioPlaying         = false;
     playPauseBtn.innerHTML = '&#x25BA; Play';
-    clearInterval(beatIntervalId);
-    beatIntervalId = null;
+    playBeatGeneration++;
     transitionTo(STATES.IDLE);
   });
 }
@@ -510,13 +515,13 @@ let micIsListening           = false;
 let tempoIsLocked            = false;
 let lockedBpm                = 0;
 let micBeatIndex             = 0;
-let beatGridIntervalId       = null;
-let beatGridAlignmentTimeout = null;
+// Incrementing this counter invalidates any in-flight beat grid scheduler.
+let beatGridGeneration = 0;
 
 function clampBpmToRange(bpm) {
   while (bpm > 160) bpm /= 2;
   while (bpm < 70)  bpm *= 2;
-  return Math.round(bpm);
+  return bpm;
 }
 
 function onMicBeat() {
@@ -526,19 +531,21 @@ function onMicBeat() {
 }
 
 function alignBeatGridToTempo(beatIntervalMs, detectedAt) {
-  clearInterval(beatGridIntervalId);
-  clearTimeout(beatGridAlignmentTimeout);
-  beatGridIntervalId = null;
-  tempoIsLocked      = true;
+  // Invalidate any running scheduler by advancing the generation counter.
+  const gen = ++beatGridGeneration;
+  tempoIsLocked = true;
 
-  const msElapsed      = performance.now() - detectedAt;
-  const msUntilNextBeat = beatIntervalMs - (msElapsed % beatIntervalMs);
-
-  beatGridAlignmentTimeout = setTimeout(() => {
-    if (!micIsListening) return;
-    onMicBeat();
-    beatGridIntervalId = setInterval(onMicBeat, beatIntervalMs);
-  }, msUntilNextBeat);
+  // Anchor beat times to detectedAt so each setTimeout is scheduled against an
+  // absolute reference -- errors never compound across beats.
+  function scheduleNext(index) {
+    const delay = detectedAt + index * beatIntervalMs - performance.now();
+    setTimeout(() => {
+      if (gen !== beatGridGeneration || !micIsListening) return;
+      onMicBeat();
+      scheduleNext(index + 1);
+    }, Math.max(0, delay));
+  }
+  scheduleNext(1);
 }
 
 async function startMicrophoneMode() {
@@ -629,11 +636,11 @@ async function startMicrophoneMode() {
 
   function handleBpmReading(bpm, label) {
     const driftRatio = lockedBpm > 0 ? Math.abs(bpm - lockedBpm) / lockedBpm : 1;
-    console.log(`[mic-bpm] ${label}: ${bpm} BPM (drift: ${(driftRatio * 100).toFixed(1)}%)`);
+    console.log(`[mic-bpm] ${label}: ${bpm.toFixed(2)} BPM (drift: ${(driftRatio * 100).toFixed(1)}%)`);
     if (driftRatio > 0.05) {
       lockedBpm = bpm;
-      updateBpmDisplay(`${bpm} BPM`);
-      setBeatSpeed(Math.round(60_000 / bpm));
+      updateBpmDisplay(`${Math.round(bpm)} BPM`);
+      setBeatSpeed(60_000 / bpm);
       alignBeatGridToTempo(60_000 / bpm, performance.now());
     }
   }
@@ -656,10 +663,7 @@ async function startMicrophoneMode() {
     if (msSinceLastPeak > SILENCE_TIMEOUT_MS && tempoIsLocked) {
       lockedBpm  = 0;
       tempoIsLocked = false;
-      clearInterval(beatGridIntervalId);
-      clearTimeout(beatGridAlignmentTimeout);
-      beatGridIntervalId       = null;
-      beatGridAlignmentTimeout = null;
+      beatGridGeneration++;
       clearVisualEffects();
       updateBpmDisplay('listening...');
     }
@@ -671,12 +675,9 @@ function stopMicrophoneMode() {
   tempoIsLocked  = false;
   lockedBpm      = 0;
   updateBpmDisplay('-- BPM');
-  clearInterval(beatGridIntervalId);
-  clearTimeout(beatGridAlignmentTimeout);
+  beatGridGeneration++;
   clearInterval(silenceCheckIntervalId);
   clearInterval(micLoudnessTimerId);
-  beatGridIntervalId       = null;
-  beatGridAlignmentTimeout = null;
   silenceCheckIntervalId   = null;
   micLoudnessTimerId       = null;
   micLoudnessAnalyser      = null;
