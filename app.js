@@ -660,14 +660,54 @@ async function startMicrophoneMode() {
     }
   });
 
+  // Pending re-lock state: track consecutive readings that agree on a new tempo.
+  let pendingBpm   = 0;
+  let pendingCount = 0;
+  const RELOCK_DRIFT     = 0.10;  // drift required to even consider a re-lock
+  const RELOCK_CONSENSUS = 3;     // consecutive agreeing readings needed to re-lock
+
+  function applyLock(bpm) {
+    lockedBpm  = bpm;
+    pendingBpm   = 0;
+    pendingCount = 0;
+    updateBpmDisplay(`${Math.round(bpm)} BPM`);
+    setBeatSpeed(60_000 / bpm);
+    alignBeatGridToTempo(60_000 / bpm, performance.now());
+  }
+
   function handleBpmReading(bpm, label) {
     const driftRatio = lockedBpm > 0 ? Math.abs(bpm - lockedBpm) / lockedBpm : 1;
     console.log(`[mic-bpm] ${label}: ${bpm.toFixed(2)} BPM (drift: ${(driftRatio * 100).toFixed(1)}%)`);
-    if (driftRatio > 0.05) {
-      lockedBpm = bpm;
-      updateBpmDisplay(`${Math.round(bpm)} BPM`);
-      setBeatSpeed(60_000 / bpm);
-      alignBeatGridToTempo(60_000 / bpm, performance.now());
+
+    // Initial lock -- no grid yet, accept immediately.
+    if (lockedBpm === 0) {
+      console.log(`[mic-bpm] initial lock at ${bpm.toFixed(2)} BPM`);
+      applyLock(bpm);
+      return;
+    }
+
+    // Within tolerance of current lock -- phase corrector handles fine adjustments,
+    // so nothing to do here.
+    if (driftRatio <= RELOCK_DRIFT) {
+      pendingBpm   = 0;
+      pendingCount = 0;
+      return;
+    }
+
+    // Outside tolerance -- accumulate consensus before re-locking.
+    const pendingDrift = pendingBpm > 0 ? Math.abs(bpm - pendingBpm) / pendingBpm : 1;
+    if (pendingDrift < 0.05) {
+      pendingCount++;
+    } else {
+      pendingBpm   = bpm;
+      pendingCount = 1;
+    }
+
+    console.log(`[mic-bpm] re-lock candidate ${bpm.toFixed(2)} BPM (${pendingCount}/${RELOCK_CONSENSUS} readings)`);
+
+    if (pendingCount >= RELOCK_CONSENSUS) {
+      console.log(`[mic-bpm] re-locking to ${bpm.toFixed(2)} BPM`);
+      applyLock(bpm);
     }
   }
 
