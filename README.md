@@ -6,6 +6,13 @@ Moshtroncity displays a datamosh visualizer that glitches the live camera feed i
 
 Designed for phones, tablets, any computer with a mic and camera. HTML5+Javascript only, runs entirely on-device (no backend server.)
 
+All rhythm and harmony detection lives in the
+[beatfinder](https://github.com/MrEricSir/beatfinder) library (loaded from a
+CDN). `app.js` just builds an audio source -- microphone in Live mode, an
+audio file in Play mode -- hands it to `beatfinder`, and maps the events it
+emits (beats, downbeats, loudness spikes, chord changes, key changes, tempo
+lock/loss) onto datamosh corruptions, zoom pulses, and neon color washes.
+
 Try it yourself on the [live site](https://mrericsir.github.io/moshtroncity/). For local development, read on:
 
 ## Development
@@ -32,7 +39,9 @@ Run the Playwright tests:
 
 Moshtroncity uses the following 3rd party libraries:
 - [datamoshlive](https://github.com/geikha/datamoshlive)
-- [realtime-bpm-analyzer](https://github.com/dlepaux/realtime-bpm-analyzer)
+- [beatfinder](https://github.com/MrEricSir/beatfinder)
+  - [Meyda](https://github.com/meyda/meyda)
+  - [realtime-bpm-analyzer](https://github.com/dlepaux/realtime-bpm-analyzer)
 - [qrcode](https://github.com/soldair/node-qrcode)
 - Sixtyfour font from [Google Fonts](https://developers.google.com/fonts/)
-- [Playwright](https://github.com/microsoft/playwright) for testing
+- [Playwright](https://github.com/microsoft/playwright)

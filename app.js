@@ -123,7 +123,7 @@ async function startApp() {
     if (navigator.maxTouchPoints > 0) flipCameraBtn.classList.remove('hidden');
 
     transitionTo(STATES.LIVE);
-    startMicrophoneMode().catch(err => {
+    startMicMode().catch(err => {
       console.error('[mic]', err);
       transitionTo(STATES.IDLE);
     });
@@ -214,38 +214,64 @@ canvasContainer.addEventListener('click', () => {
   if (panelIsOpen) closeControlsPanel();
 });
 
-// Loudness tracking 
 //
-// Maintains a rolling 30-second window of RMS values. loudnessLevel is the
-// percentile rank of the current RMS in that window (0 = quietest, 1 = loudest),
-// smoothed with an EMA so effect thresholds respond gradually over a few beats
-// rather than jumping on transients.
+// Audio event engine
+//
+// All rhythm and harmony detection lives in beatfinder.js. We build one
+// dedicated AudioContext per mic/file session, hand beatfinder a source
+// node, and wire its events to the datamosh visuals. Only one engine runs
+// at a time; starting a new one always tears down the previous one.
 
-const LOUDNESS_HISTORY_SIZE = 300; // 300 samples × 100 ms = 30 s
-let loudnessLevel = 0.5;
+const BEATFINDER_URL =
+  'https://cdn.jsdelivr.net/npm/beatfinder@0.1.0/beatfinder.js';
+const REALTIME_BPM_ANALYZER_URL =
+  'https://cdn.jsdelivr.net/npm/realtime-bpm-analyzer@5.0.15/dist/index.esm.js';
 
-function beginLoudnessTracking(analyserNode) {
-  const sampleBuffer     = new Float32Array(analyserNode.fftSize);
-  const rmsHistory       = [];
-  let smoothedPercentile = 0.5;
+const dependenciesPromise = Promise.all([
+  import(BEATFINDER_URL),
+  import(REALTIME_BPM_ANALYZER_URL),
+]);
 
-  return setInterval(() => {
-    analyserNode.getFloatTimeDomainData(sampleBuffer);
+let activeEngine = null;
 
-    let sumOfSquares = 0;
-    for (let i = 0; i < sampleBuffer.length; i++) sumOfSquares += sampleBuffer[i] ** 2;
-    const rms = Math.sqrt(sumOfSquares / sampleBuffer.length);
+async function startBeatFinder(audioContext, source, { boost, audible }) {
+  if (audible) source.connect(audioContext.destination);
 
-    rmsHistory.push(rms);
-    if (rmsHistory.length > LOUDNESS_HISTORY_SIZE) rmsHistory.shift();
-    if (rmsHistory.length < 10) return;
+  const [{ createBeatFinder }, { createRealtimeBpmAnalyzer }] = await dependenciesPromise;
 
-    const samplesAtOrBelow = rmsHistory.filter(v => v <= rms).length;
-    const percentile       = samplesAtOrBelow / rmsHistory.length;
+  const engine = await createBeatFinder({
+    audioContext,
+    source,
+    boost,
+    Meyda: window.Meyda,
+    createRealtimeBpmAnalyzer,
+  });
 
-    smoothedPercentile = smoothedPercentile * 0.92 + percentile * 0.08;
-    loudnessLevel = smoothedPercentile;
-  }, 100);
+  engine.on('peak',          () => flashLedBriefly(peakLed, 'led-peak-on'));
+  engine.on('predictedBeat', ({ tickIndex }) => applyBeatEffects(tickIndex));
+  engine.on('downbeat',      () => datamosh?.drop());
+  engine.on('loudnessSpike', () => { flashRandomNeonColor(); pulseZoom(); });
+  engine.on('chordChange',   () => flashRandomNeonColor());
+  engine.on('keyChange',     ({ key }) => setTintForKey(key));
+  engine.on('bpmChange',     ({ bpm }) => {
+    updateBpmDisplay(`${Math.round(bpm)} BPM`);
+    setBeatSpeed(60_000 / bpm);
+  });
+  engine.on('tempoLost', () => {
+    clearVisualEffects();
+    updateBpmDisplay('listening...');
+  });
+
+  updateBpmDisplay('listening...');
+  activeEngine = engine;
+  return engine;
+}
+
+function tearDownActiveEngine() {
+  // Safe to close the context here: every mic/file session below builds a
+  // dedicated AudioContext just for its engine and never shares it.
+  activeEngine?.stop({ closeContext: true });
+  activeEngine = null;
 }
 
 //
@@ -270,28 +296,40 @@ function flashRandomNeonColor() {
   tintExpiresAt    = Date.now() + 200;
 }
 
+// Key names beatfinder reports, e.g. "A minor" -- index maps to a hue.
+const PITCH_CLASSES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+function setTintForKey(key) {
+  const index = PITCH_CLASSES.indexOf(key.split(' ')[0]);
+  if (index < 0) return;
+  currentTintColor = `hsl(${index * 30}, 100%, 60%)`;
+  tintExpiresAt    = Date.now() + 3000;
+}
+
+let zoomPulseTimer = null;
+
+function pulseZoom() {
+  applyZoomLevel(2);
+  clearTimeout(zoomPulseTimer);
+  zoomPulseTimer = setTimeout(() => applyZoomLevel(0), 350);
+}
+
 function clearVisualEffects() {
   if (datamosh) datamosh.sync();
-  loudnessLevel = 0.5;
   applyZoomLevel(0);
 }
 
-function applyBeatEffects(beatIndex) {
+function applyBeatEffects(tickIndex) {
   if (!datamosh) return;
 
-
-  datamosh.corruptRate = Math.min(Math.random() * loudnessLevel, 1.0);
+  datamosh.corruptRate = Math.random() * 0.6;
   datamosh.corrupt();
 
-  if (beatIndex % 2 === 0) {
+  if (tickIndex % 2 === 0) {
     datamosh.drop();
   } else {
     datamosh.sync();
   }
-
-  applyZoomLevel(loudnessLevel > 0.75 ? 3 : loudnessLevel > 0.5 ? 2 : 0);
-
-  if (loudnessLevel > 0.75) flashRandomNeonColor();
 
   flashLedBriefly(beatLed, 'led-beat-on');
 }
@@ -302,18 +340,8 @@ document.getElementById('btn-color-flash').addEventListener('click', flashRandom
 // Play mode panel
 //
 
-const REALTIME_BPM_ANALYZER_URL =
-  'https://cdn.jsdelivr.net/npm/realtime-bpm-analyzer@5.0.15/dist/index.esm.js';
-
-let audioPlayer         = null;
-let detectedBpm         = 0;
-let playBeatIndex       = 0;
-// Incrementing this counter invalidates any in-flight play beat scheduler.
-let playBeatGeneration = 0;
-let isAudioPlaying      = false;
-let playLoudnessCtx     = null;
-let playLoudnessTimerId = null;
-let currentFileUrl      = null;
+let audioPlayer    = null;
+let currentFileUrl = null;
 
 const playPauseBtn   = document.getElementById('btn-play-pause');
 const trackNameLabel = document.getElementById('play-track-name');
@@ -329,7 +357,6 @@ async function loadAudioFile(file) {
 
   trackNameLabel.textContent = file.name;
   playPauseBtn.disabled      = false;
-  updateBpmDisplay('detecting...');
 
   audioPlayer      = new Audio(currentFileUrl);
   audioPlayer.loop = false;
@@ -339,82 +366,41 @@ async function loadAudioFile(file) {
   timeTotalEl.textContent   = '--:--';
   attachAudioSeekListeners();
 
+  // An HTMLMediaElement can only ever be connected to one
+  // MediaElementSourceNode, so this engine is built once per loaded file
+  // and reused across play/pause. boost lifts the analysis chain only --
+  // audible: true routes the unboosted signal to the speakers.
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioContext.state === 'suspended') audioContext.resume().catch(() => {});
+  const source = audioContext.createMediaElementSource(audioPlayer);
   try {
-    playLoudnessCtx     = new AudioContext();
-    const sourceNode    = playLoudnessCtx.createMediaElementSource(audioPlayer);
-    const analyserNode  = playLoudnessCtx.createAnalyser();
-    analyserNode.fftSize = 1024;
-    sourceNode.connect(analyserNode);
-    analyserNode.connect(playLoudnessCtx.destination);
-    playLoudnessCtx.resume();
-    playLoudnessTimerId = beginLoudnessTracking(analyserNode);
+    await startBeatFinder(audioContext, source, { boost: 10, audible: true });
   } catch (e) {
-    console.warn('[loudness] play setup failed:', e);
-  }
-
-  try {
-    const { analyzeFullBuffer } = await import(REALTIME_BPM_ANALYZER_URL);
-    const fileBytes    = await file.arrayBuffer();
-    const offlineCtx   = new OfflineAudioContext(1, Math.max(1, (fileBytes.byteLength / 2) | 0), 44100);
-    const audioBuffer  = await offlineCtx.decodeAudioData(fileBytes);
-    const candidates   = await analyzeFullBuffer(audioBuffer);
-    const topCandidate = Array.isArray(candidates)
-      ? candidates.reduce((best, c) => (c.count > (best?.count ?? -1) ? c : best), null)
-      : null;
-    if (topCandidate) {
-      detectedBpm = clampBpmToRange(topCandidate.tempo);
-      updateBpmDisplay(`${Math.round(detectedBpm)} BPM`);
-      if (isAudioPlaying) {
-        const msPerBeat = 60_000 / detectedBpm;
-        setBeatSpeed(msPerBeat);
-        playBeatIndex = 0;
-        startPlayBeatScheduler(msPerBeat);
-      }
-    } else {
-      updateBpmDisplay('-- BPM');
-    }
-  } catch (e) {
-    console.warn('[bpm] detection failed:', e);
-    updateBpmDisplay('--- BPM');
+    console.warn('[beatfinder] play setup failed:', e);
+    updateBpmDisplay('-- BPM');
   }
 }
 
 function handlePlayPauseToggle() {
   if (!audioPlayer) return;
   if (audioPlayer.paused) {
-    if (appState === STATES.LIVE) {
-      try { stopMicrophoneMode(); } catch (e) { console.warn('[mic] cleanup failed:', e); }
-    }
-    if (playLoudnessCtx?.state === 'suspended') playLoudnessCtx.resume();
+    if (appState === STATES.LIVE) stopMicMode();
     audioPlayer.play();
-    isAudioPlaying         = true;
     playPauseBtn.innerHTML = '&#x2016; Pause';
     transitionTo(STATES.PLAYING);
-
-    if (detectedBpm > 0) {
-      playBeatIndex   = 0;
-      const msPerBeat = 60_000 / detectedBpm;
-      setBeatSpeed(msPerBeat);
-      startPlayBeatScheduler(msPerBeat);
-    }
   } else {
     audioPlayer.pause();
-    isAudioPlaying         = false;
     playPauseBtn.innerHTML = '&#x25BA; Play';
     transitionTo(STATES.IDLE);
   }
 }
 
 function tearDownPlayMode() {
-  isAudioPlaying = false;
-  playBeatGeneration++;
-  clearInterval(playLoudnessTimerId);
-  playLoudnessTimerId = null;
-  detectedBpm         = 0;
+  tearDownActiveEngine();
   clearVisualEffects();
 
-  if (playLoudnessCtx) { playLoudnessCtx.close(); playLoudnessCtx = null; }
-  if (audioPlayer)     { audioPlayer.pause(); audioPlayer.src = ''; audioPlayer = null; }
+  if (currentFileUrl) { URL.revokeObjectURL(currentFileUrl); currentFileUrl = null; }
+  if (audioPlayer)    { audioPlayer.pause(); audioPlayer.src = ''; audioPlayer = null; }
 
   playPauseBtn.innerHTML = '&#x25BA; Play';
   playPauseBtn.disabled  = true;
@@ -425,22 +411,6 @@ function tearDownPlayMode() {
   timeCurrentEl.textContent  = '--:--';
   timeTotalEl.textContent    = '--:--';
   updateBpmDisplay('-- BPM');
-}
-
-function startPlayBeatScheduler(intervalMs) {
-  const gen       = ++playBeatGeneration;
-  const startTime = performance.now();
-
-  function scheduleNext(index) {
-    const delay = startTime + index * intervalMs - performance.now();
-    setTimeout(() => {
-      if (gen !== playBeatGeneration || !isAudioPlaying) return;
-      applyBeatEffects(playBeatIndex);
-      playBeatIndex = (playBeatIndex + 1) % 4;
-      scheduleNext(index + 1);
-    }, Math.max(0, delay));
-  }
-  scheduleNext(1);
 }
 
 document.getElementById('file-input').addEventListener('change', (e) => {
@@ -481,9 +451,8 @@ function attachAudioSeekListeners() {
     timeCurrentEl.textContent = formatDuration(audioPlayer.currentTime);
   });
   audioPlayer.addEventListener('ended', () => {
-    isAudioPlaying         = false;
     playPauseBtn.innerHTML = '&#x25BA; Play';
-    playBeatGeneration++;
+    clearVisualEffects();
     transitionTo(STATES.IDLE);
   });
 }
@@ -497,267 +466,37 @@ document.getElementById('btn-skip-forward').addEventListener('click', () => {
 });
 
 //
-// Microphone mode panel
+// Microphone mode
 //
 
-// Audio graph:  mic → 10× boost → [loudness analyser]
-//                                → 1kHz lowpass → BPM analyser → silent sink
+let micStream = null;
 
-const SILENCE_TIMEOUT_MS = 8_000;
+async function startMicMode() {
+  tearDownActiveEngine();
 
-let micStream                = null;
-let micBpmAnalyser           = null;
-let micLoudnessAnalyser      = null;
-let micLoudnessTimerId       = null;
-let silenceCheckIntervalId   = null;
-let lastPeakDetectedAt       = 0;
-let micIsListening           = false;
-let tempoIsLocked            = false;
-let lockedBpm                = 0;
-let micBeatIndex             = 0;
-// Incrementing this counter invalidates any in-flight beat grid scheduler.
-let beatGridGeneration  = 0;
-// Anchor time and interval for the running beat grid -- written by
-// alignBeatGridToTempo and nudged by the validPeak phase corrector.
-let beatGridAnchor      = 0;
-let beatGridIntervalMs  = 0;
-
-function clampBpmToRange(bpm) {
-  while (bpm > 160) bpm /= 2;
-  while (bpm < 70)  bpm *= 2;
-  return bpm;
-}
-
-function onMicBeat() {
-  if (!micIsListening) return;
-  applyBeatEffects(micBeatIndex);
-  micBeatIndex = (micBeatIndex + 1) % 16;
-}
-
-function alignBeatGridToTempo(intervalMs, anchor) {
-  // Invalidate any running scheduler by advancing the generation counter.
-  const gen = ++beatGridGeneration;
-  tempoIsLocked     = true;
-  beatGridAnchor    = anchor;
-  beatGridIntervalMs = intervalMs;
-
-  // Reads beatGridAnchor and beatGridIntervalMs from module scope on every tick
-  // so that phase corrections applied by validPeak take effect immediately.
-  function scheduleNext(index) {
-    const delay = beatGridAnchor + index * beatGridIntervalMs - performance.now();
-    setTimeout(() => {
-      if (gen !== beatGridGeneration || !micIsListening) return;
-      onMicBeat();
-      scheduleNext(index + 1);
-    }, Math.max(0, delay));
-  }
-  scheduleNext(1);
-}
-
-async function startMicrophoneMode() {
-  // Set micIsListening immediately so stopMicrophoneMode() can cancel this
-  // function mid-setup by setting it back to false.
-  micIsListening = true;
-
-  const audioCtx = gestureUnlockedAudioCtx ?? new (window.AudioContext || window.webkitAudioContext)();
-  gestureUnlockedAudioCtx = null;
-  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-
-  // On mobile, use AGC to increase volume of quiet ambient audio to a detectable level.
   const isMobile = navigator.maxTouchPoints > 0;
   micStream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: isMobile },
     video: false,
   });
-  if (!micIsListening) {
-    micStream.getTracks().forEach(t => t.stop());
-    micStream = null;
-    audioCtx.close();
-    return;
-  }
 
-  const { createRealtimeBpmAnalyzer } = await import(REALTIME_BPM_ANALYZER_URL);
-  if (!micIsListening) { audioCtx.close(); return; }
+  const audioContext = gestureUnlockedAudioCtx ?? new (window.AudioContext || window.webkitAudioContext)();
+  gestureUnlockedAudioCtx = null;
+  if (audioContext.state === 'suspended') audioContext.resume().catch(() => {});
 
-  const micSource   = audioCtx.createMediaStreamSource(micStream);
-  const boostGain   = audioCtx.createGain();
-  const bpmBoost    = audioCtx.createGain();
-  const kickHiPass  = audioCtx.createBiquadFilter();
-  const kickLoPass  = audioCtx.createBiquadFilter();
-  const silentSink  = audioCtx.createGain();
-
-  boostGain.gain.value         = 10;
-  // Extra 2x on mobile only (20x total + hardware AGC).
-  bpmBoost.gain.value          = isMobile ? 2 : 1;
-  kickHiPass.type              = 'highpass';
-  kickHiPass.frequency.value   = 60;
-  kickHiPass.Q.value           = 0.7;
-  kickLoPass.type              = 'lowpass';
-  // Attempt to capture kick drum attack at around 600 Hz
-  kickLoPass.frequency.value   = 600;
-  kickLoPass.Q.value           = 0.7;
-  silentSink.gain.value        = 0;
-
-  micLoudnessAnalyser         = audioCtx.createAnalyser();
-  micLoudnessAnalyser.fftSize = 1024;
-
-  micBpmAnalyser = await createRealtimeBpmAnalyzer(audioCtx, {
-    continuousAnalysis: true,
-    stabilizationTime:  10_000,
-    debug:              true,
-  });
-  if (!micIsListening) {
-    micBpmAnalyser.stop();
-    micBpmAnalyser.disconnect();
-    micBpmAnalyser = null;
-    audioCtx.close();
-    return;
-  }
-
-  micSource.connect(boostGain);
-  boostGain.connect(micLoudnessAnalyser);
-  boostGain.connect(kickHiPass);
-  kickHiPass.connect(kickLoPass);
-  kickLoPass.connect(bpmBoost);
-  bpmBoost.connect(micBpmAnalyser.node);
-  bpmBoost.connect(silentSink);
-  silentSink.connect(audioCtx.destination);
-
-  micLoudnessTimerId = beginLoudnessTracking(micLoudnessAnalyser);
-  micBeatIndex       = 0;
-  tempoIsLocked      = false;
-  lockedBpm          = 0;
-  lastPeakDetectedAt = performance.now();
-  updateBpmDisplay('listening...');
-
-  function pickTopCandidate(candidates) {
-    if (!candidates?.length) return null;
-    return candidates.reduce((best, c) => (c.count > (best?.count ?? -1) ? c : best), null);
-  }
-
-  micBpmAnalyser.on('validPeak', () => {
-    const now = performance.now();
-    flashLedBriefly(peakLed, 'led-peak-on');
-    lastPeakDetectedAt = now;
-
-    if (!tempoIsLocked || beatGridIntervalMs === 0) return;
-
-    // Compute how far this peak sits from the nearest scheduled beat.
-    // fractional is in [0, 1); normalize to [-0.5, 0.5) so the sign tells us
-    // which direction the grid needs to shift.
-    const beatsElapsed       = (now - beatGridAnchor) / beatGridIntervalMs;
-    const fractional         = ((beatsElapsed % 1) + 1) % 1;
-    const normalizedFraction = fractional > 0.5 ? fractional - 1 : fractional;
-    const phaseErrorMs       = normalizedFraction * beatGridIntervalMs;
-
-    // Only act when the peak is within 40% of a beat boundary -- peaks that
-    // land in the middle of a beat interval are likely non-kick transients.
-    if (Math.abs(phaseErrorMs) < beatGridIntervalMs * 0.4) {
-      // Apply 25% of the error each peak (EMA) so corrections converge
-      // smoothly over several beats rather than jumping all at once.
-      beatGridAnchor += phaseErrorMs * 0.25;
-      console.log(`[phase] error ${phaseErrorMs.toFixed(1)} ms -> anchor nudged ${(phaseErrorMs * 0.25).toFixed(1)} ms`);
-    }
-  });
-
-  // Pending re-lock state: track consecutive readings that agree on a new tempo.
-  let pendingBpm   = 0;
-  let pendingCount = 0;
-  const RELOCK_DRIFT     = 0.10;  // drift required to even consider a re-lock
-  const RELOCK_CONSENSUS = 3;     // consecutive agreeing readings needed to re-lock
-
-  function applyLock(bpm) {
-    lockedBpm  = bpm;
-    pendingBpm   = 0;
-    pendingCount = 0;
-    updateBpmDisplay(`${Math.round(bpm)} BPM`);
-    setBeatSpeed(60_000 / bpm);
-    alignBeatGridToTempo(60_000 / bpm, performance.now());
-  }
-
-  function handleBpmReading(bpm, label) {
-    const driftRatio = lockedBpm > 0 ? Math.abs(bpm - lockedBpm) / lockedBpm : 1;
-    console.log(`[mic-bpm] ${label}: ${bpm.toFixed(2)} BPM (drift: ${(driftRatio * 100).toFixed(1)}%)`);
-
-    // Initial lock -- no grid yet, accept immediately.
-    if (lockedBpm === 0) {
-      console.log(`[mic-bpm] initial lock at ${bpm.toFixed(2)} BPM`);
-      applyLock(bpm);
-      return;
-    }
-
-    // Within tolerance of current lock -- phase corrector handles fine adjustments,
-    // so nothing to do here.
-    if (driftRatio <= RELOCK_DRIFT) {
-      pendingBpm   = 0;
-      pendingCount = 0;
-      return;
-    }
-
-    // Outside tolerance -- accumulate consensus before re-locking.
-    const pendingDrift = pendingBpm > 0 ? Math.abs(bpm - pendingBpm) / pendingBpm : 1;
-    if (pendingDrift < 0.05) {
-      pendingCount++;
-    } else {
-      pendingBpm   = bpm;
-      pendingCount = 1;
-    }
-
-    console.log(`[mic-bpm] re-lock candidate ${bpm.toFixed(2)} BPM (${pendingCount}/${RELOCK_CONSENSUS} readings)`);
-
-    if (pendingCount >= RELOCK_CONSENSUS) {
-      console.log(`[mic-bpm] re-locking to ${bpm.toFixed(2)} BPM`);
-      applyLock(bpm);
-    }
-  }
-
-  micBpmAnalyser.on('bpm', ({ bpm: candidates }) => {
-    const top = pickTopCandidate(candidates);
-    if (!top || top.count < 10) return;
-    handleBpmReading(clampBpmToRange(top.tempo), 'bpm');
-  });
-
-  micBpmAnalyser.on('bpmStable', ({ bpm: candidates }) => {
-    const top = pickTopCandidate(candidates);
-    if (!top) return;
-    handleBpmReading(clampBpmToRange(top.tempo), 'bpmStable');
-  });
-
-  silenceCheckIntervalId = setInterval(() => {
-    if (!micIsListening) return;
-    const msSinceLastPeak = performance.now() - lastPeakDetectedAt;
-    if (msSinceLastPeak > SILENCE_TIMEOUT_MS && tempoIsLocked) {
-      lockedBpm  = 0;
-      tempoIsLocked = false;
-      beatGridGeneration++;
-      clearVisualEffects();
-      updateBpmDisplay('listening...');
-    }
-  }, 2_000);
+  const source = audioContext.createMediaStreamSource(micStream);
+  // 10x boost (20x on mobile, plus hardware AGC) lifts quiet ambient audio
+  // to a level beatfinder's peak detector can work with.
+  await startBeatFinder(audioContext, source, { boost: isMobile ? 20 : 10, audible: false });
 }
 
-function stopMicrophoneMode() {
-  micIsListening = false;
-  tempoIsLocked  = false;
-  lockedBpm      = 0;
-  updateBpmDisplay('-- BPM');
-  beatGridGeneration++;
-  clearInterval(silenceCheckIntervalId);
-  clearInterval(micLoudnessTimerId);
-  silenceCheckIntervalId   = null;
-  micLoudnessTimerId       = null;
-  micLoudnessAnalyser      = null;
-  clearVisualEffects();
-
-  if (micBpmAnalyser) {
-    micBpmAnalyser.stop();
-    micBpmAnalyser.disconnect();
-    micBpmAnalyser = null;
-  }
+function stopMicMode() {
+  tearDownActiveEngine();
   if (micStream) {
     micStream.getTracks().forEach(track => track.stop());
     micStream = null;
   }
+  updateBpmDisplay('-- BPM');
 }
 
 //
@@ -838,7 +577,7 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
       if (appState === STATES.LIVE) return;  // already live, no-op
       if (appState === STATES.PLAYING) tearDownPlayMode();
       transitionTo(STATES.LIVE);
-      startMicrophoneMode().catch(err => {
+      startMicMode().catch(err => {
         console.error('[mic]', err);
         transitionTo(STATES.IDLE);
       });
